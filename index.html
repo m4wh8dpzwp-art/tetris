@@ -48,6 +48,15 @@ body {
 }
 #aiBtn:hover { background:#25252d; }
 #aiBtn.on { border-color:#00d4ff; color:#00d4ff; background:#1a2a33; }
+#soundBtn {
+  margin-top:10px; width:100%; padding:12px 0;
+  font-size:15px; font-weight:600;
+  background:#1f1f26; color:#888;
+  border:2px solid #2a2a32; border-radius:8px;
+  cursor:pointer; transition:all 0.1s ease;
+}
+#soundBtn:hover { background:#25252d; }
+#soundBtn.on { border-color:#00d4ff; color:#00d4ff; background:#1a2a33; }
 .ai-speed { margin-top:24px; font-size:12px; color:#555; }
 .ai-speed .top { display:flex; justify-content:space-between; margin-bottom:6px; font-size:11px; }
 #speedLabel { color:#00d4ff; font-weight:600; }
@@ -66,6 +75,7 @@ body {
   <canvas id="next" width="120" height="120"></canvas>
 
   <button id="aiBtn">🤖 AI: OFF</button>
+  <button id="soundBtn">🔊 Sound: ON</button>
 
   <div class="ai-speed">
     <div class="top">
@@ -96,7 +106,9 @@ let score = 0, level = 1, dropInterval = 800;
 let lastDrop = Date.now();
 let gameOver = false;
 let keys = {};
-let audioCtx;
+let audioCtx, masterGain, noiseBuffer;
+let soundOn = localStorage.getItem('tetrisSoundOn') !== 'off';
+let musicTimer = null, musicStep = 0;
 let downWasHeld = false;
 let aiEnabled = false;
 let aiHasMoved = false;
@@ -105,24 +117,128 @@ let aiSpeed = 3;
 let aiFrameCount = 0;
 
 function initAudio() {
-  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = soundOn ? 1 : 0;
+    masterGain.connect(audioCtx.destination);
+
+    const len = audioCtx.sampleRate * 0.3;
+    noiseBuffer = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  }
   if (audioCtx.state === 'suspended') audioCtx.resume();
 }
 
-function playSound(type) {
+function playTone(freq, start, dur, type, peak, dest, glideTo) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, start);
+  if (glideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(glideTo, 1), start + dur);
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(peak, start + Math.min(0.015, dur * 0.3));
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+  osc.connect(gain); gain.connect(dest);
+  osc.start(start); osc.stop(start + dur + 0.02);
+}
+
+function playNoiseBurst(start, dur, peak, dest, filterFreq) {
+  const src = audioCtx.createBufferSource();
+  src.buffer = noiseBuffer;
+  const gain = audioCtx.createGain();
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'highpass'; filter.frequency.value = filterFreq || 1200;
+  gain.gain.setValueAtTime(peak, start);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+  src.connect(filter); filter.connect(gain); gain.connect(dest);
+  src.start(start); src.stop(start + dur);
+}
+
+function playSound(type, arg) {
   try {
     initAudio();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    const filter = audioCtx.createBiquadFilter();
-    osc.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+    const t = audioCtx.currentTime;
+    const dest = masterGain;
 
-    if (type === 'move') { osc.type = 'square'; osc.frequency.value = 200; gain.gain.value = 0.12; filter.type = 'lowpass'; filter.frequency.value = 1000; gain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + 0.05); osc.start(); setTimeout(() => osc.stop(), 70); }
-    if (type === 'rotate') { osc.type = 'sawtooth'; osc.frequency.value = 650; gain.gain.value = 0.15; filter.type = 'lowpass'; filter.frequency.value = 1600; gain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + 0.07); osc.start(); setTimeout(() => osc.stop(), 100); }
-    if (type === 'lock') { osc.type = 'sine'; osc.frequency.value = 120; gain.gain.value = 0.18; filter.type = 'lowpass'; filter.frequency.value = 700; gain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + 0.2); osc.start(); setTimeout(() => osc.stop(), 240); }
-    if (type === 'clear') { osc.type = 'triangle'; gain.gain.value = 0.22; filter.type = 'lowpass'; filter.frequency.value = 2400; osc.frequency.setValueAtTime(980, audioCtx.currentTime); osc.frequency.setValueAtTime(1480, audioCtx.currentTime + 0.06); gain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + 0.3); osc.start(); setTimeout(() => osc.stop(), 350); }
-    if (type === 'gameover') { osc.type = 'sawtooth'; gain.gain.value = 0.25; filter.type = 'lowpass'; filter.frequency.value = 1000; osc.frequency.setValueAtTime(280, audioCtx.currentTime); osc.frequency.linearRampToValueAtTime(60, audioCtx.currentTime + 0.7); gain.gain.linearRampToValueAtTime(0.0001, audioCtx.currentTime + 0.8); osc.start(); setTimeout(() => osc.stop(), 900); }
+    if (type === 'move') { playTone(180, t, 0.045, 'square', 0.10, dest, 130); }
+    if (type === 'rotate') { playTone(520, t, 0.05, 'square', 0.11, dest, 720); playTone(720, t+0.045, 0.06, 'square', 0.09, dest); }
+    if (type === 'lock') { playTone(150, t, 0.12, 'sine', 0.16, dest, 60); playNoiseBurst(t, 0.06, 0.10, dest, 2000); }
+    if (type === 'clear') {
+      const lines = arg || 1;
+      const notes = [660, 880, 1100, 1320];
+      for (let i = 0; i < Math.min(lines, 4); i++) playTone(notes[i], t + i*0.055, 0.16, 'triangle', 0.20, dest);
+      playNoiseBurst(t, 0.12, lines >= 4 ? 0.18 : 0.08, dest, 3000);
+      if (lines >= 4) playTone(1760, t + 0.22, 0.22, 'square', 0.14, dest);
+    }
+    if (type === 'levelup') { playTone(440, t, 0.1, 'triangle', 0.14, dest); playTone(660, t+0.09, 0.1, 'triangle', 0.14, dest); playTone(880, t+0.18, 0.16, 'triangle', 0.16, dest); }
+    if (type === 'gameover') {
+      playTone(280, t, 0.8, 'sawtooth', 0.18, dest, 55);
+      playTone(220, t, 0.8, 'sawtooth', 0.12, dest, 40);
+      playNoiseBurst(t, 0.3, 0.10, dest, 400);
+    }
   } catch(e){}
+}
+
+const NOTE = {A3:220.00,B3:246.94,C4:261.63,D4:293.66,E4:329.63,F4:349.23,G4:392.00,
+  A4:440.00,B4:493.88,C5:523.25,D5:587.33,E5:659.25,F5:698.46,G5:783.99,A5:880.00,R:0};
+
+const MELODY = [
+  ['E5',2],['B4',1],['C5',1],['D5',2],['C5',1],['B4',1],
+  ['A4',2],['A4',1],['C5',1],['E5',2],['D5',1],['C5',1],
+  ['B4',3],['C5',1],['D5',2],['E5',2],
+  ['C5',2],['A4',2],['A4',2],['R',2],
+  ['D5',3],['F5',1],['A5',2],['G5',1],['F5',1],
+  ['E5',3],['C5',1],['E5',2],['D5',1],['C5',1],
+  ['B4',2],['B4',1],['C5',1],['D5',2],['E5',2],
+  ['C5',2],['A4',2],['A4',2],['R',2],
+];
+const BASS = ['E4','E4','A3','A3','E4','E4','B3','B3','C4','C4','G4','G4','C4','C4','D4','D4'];
+
+function scheduleMusic() {
+  if (!audioCtx) return;
+  const eighth = 0.16;
+  let t = audioCtx.currentTime + 0.05;
+  const loopStart = t;
+  const musicGain = audioCtx.createGain();
+  musicGain.gain.value = 0.5;
+  musicGain.connect(masterGain);
+
+  MELODY.forEach(([note, dur]) => {
+    const freq = NOTE[note];
+    const d = dur * eighth;
+    if (freq) playTone(freq, t, d * 0.92, 'square', 0.075, musicGain);
+    t += d;
+  });
+
+  let bt = loopStart;
+  const barDur = eighth * 4;
+  BASS.forEach(note => { playTone(NOTE[note]/2, bt, barDur * 0.85, 'triangle', 0.08, musicGain); bt += barDur; });
+
+  const loopDur = t - loopStart;
+  musicTimer = setTimeout(scheduleMusic, (loopDur - 0.1) * 1000);
+}
+
+function startMusic() {
+  initAudio();
+  if (musicTimer) return;
+  scheduleMusic();
+}
+
+function stopMusic() {
+  if (musicTimer) { clearTimeout(musicTimer); musicTimer = null; }
+}
+
+function toggleSound() {
+  soundOn = !soundOn;
+  localStorage.setItem('tetrisSoundOn', soundOn ? 'on' : 'off');
+  initAudio();
+  masterGain.gain.linearRampToValueAtTime(soundOn ? 1 : 0, audioCtx.currentTime + 0.05);
+  const btn = document.getElementById('soundBtn');
+  btn.innerHTML = soundOn ? '🔊 Sound: ON' : '🔇 Sound: OFF';
+  btn.classList.toggle('on', soundOn);
+  if (soundOn) startMusic(); else stopMusic();
 }
 
 function randomPiece() {
@@ -177,11 +293,14 @@ function clearLines() {
   }
   if (cleared) {
     score += cleared*100*level;
-    level = Math.floor(score/1000)+1;
+    const newLevel = Math.floor(score/1000)+1;
+    const leveledUp = newLevel > level;
+    level = newLevel;
     dropInterval = Math.max(50,800-(level-1)*55);
     document.getElementById('score').textContent=score;
     document.getElementById('level').textContent=level;
-    playSound('clear');
+    playSound('clear', cleared);
+    if (leveledUp) playSound('levelup');
   }
 }
 
@@ -397,14 +516,7 @@ document.addEventListener('keydown', e => {
 
   if (!window._tetrisAudioReady) {
     window._tetrisAudioReady = true;
-    try {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.connect(gain); gain.connect(audioCtx.destination);
-      gain.gain.value = 0.0001;
-      osc.start();
-      setTimeout(() => { osc.stop(); }, 10);
-    } catch(e){}
+    if (soundOn) startMusic();
   }
 
   if (gameOver || !piece) {
@@ -426,6 +538,14 @@ document.addEventListener('keyup', e => {
   if (e.key === 'ArrowDown') downWasHeld = false;
 });
 
+document.addEventListener('click', () => {
+  initAudio();
+  if (!window._tetrisAudioReady) {
+    window._tetrisAudioReady = true;
+    if (soundOn) startMusic();
+  }
+}, { once: true });
+
 function start() {
   board = Array.from({length:ROWS},()=>Array(COLS).fill(0));
   score=0; level=1; dropInterval=800; gameOver=false; downWasHeld=false; aiEnabled=false; aiHasMoved=false; aiTarget=null; aiFrameCount=0;
@@ -434,6 +554,11 @@ function start() {
   nextPiece=randomPiece(); newPiece(); lastDrop=Date.now(); keys={};
 
   aiBtn.onclick = toggleAI;
+
+  const soundBtn = document.getElementById('soundBtn');
+  soundBtn.innerHTML = soundOn ? '🔊 Sound: ON' : '🔇 Sound: OFF';
+  soundBtn.classList.toggle('on', soundOn);
+  soundBtn.onclick = toggleSound;
 
   const speedSlider = document.getElementById('aiSpeed');
   const speedLabel = document.getElementById('speedLabel');
