@@ -258,9 +258,18 @@ function drawBlock(c, x, y, color) {
 
 function drawBoard() {
   ctx.fillStyle = '#0f0f14'; ctx.fillRect(0,0,canvas.width,canvas.height);
-  ctx.strokeStyle = '#1a1a22'; ctx.lineWidth = 1;
-  for (let x=0; x<=COLS; x++) { ctx.beginPath(); ctx.moveTo(x*SIZE,0); ctx.lineTo(x*SIZE,ROWS*SIZE); ctx.stroke(); }
-  for (let y=0; y<=ROWS; y++) { ctx.beginPath(); ctx.moveTo(0,y*SIZE); ctx.lineTo(COLS*SIZE,y*SIZE); ctx.stroke(); }
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 1;
+  for (let x=1; x<COLS; x++) { ctx.beginPath(); ctx.moveTo(x*SIZE+0.5,0); ctx.lineTo(x*SIZE+0.5,ROWS*SIZE); ctx.stroke(); }
+  for (let y=1; y<ROWS; y++) { ctx.beginPath(); ctx.moveTo(0,y*SIZE+0.5); ctx.lineTo(COLS*SIZE,y*SIZE+0.5); ctx.stroke(); }
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.16)'; ctx.lineWidth = 1;
+  for (let x=2; x<COLS; x+=2) { ctx.beginPath(); ctx.moveTo(x*SIZE+0.5,0); ctx.lineTo(x*SIZE+0.5,ROWS*SIZE); ctx.stroke(); }
+  for (let y=2; y<ROWS; y+=2) { ctx.beginPath(); ctx.moveTo(0,y*SIZE+0.5); ctx.lineTo(COLS*SIZE,y*SIZE+0.5); ctx.stroke(); }
+
+  ctx.strokeStyle = 'rgba(0,212,255,0.22)'; ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, COLS*SIZE-1, ROWS*SIZE-1);
+
   for (let y=0; y<ROWS; y++) for (let x=0; x<COLS; x++) if (board[y][x]) drawBlock(ctx, x, y, board[y][x]);
 }
 
